@@ -1,0 +1,44 @@
+name: Convert and Publish Music
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    environment: github-pages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Convert audio to OGG
+        run: |
+          shopt -s nullglob nocaseglob
+          files=(*.m4a *.mp3 *.wav *.flac *.opus)
+          if [ ${#files[@]} -gt 0 ]; then
+            sudo apt-get update && sudo apt-get install -y ffmpeg
+            i=1
+            for file in "${files[@]}"; do
+              name="${file%.*}"
+              clean=$(echo "$name" | sed -E 's/[^a-zA-Z0-9_-]+/_/g; s/^_+|_+$//g')
+              while [ -z "$clean" ] || [ -f "${clean}.ogg" ]; do
+                clean="track_${i}"
+                i=$((i + 1))
+              done
+              ffmpeg -y -i "$file" -vn -ar 44100 -ac 2 -c:a libvorbis -q:a 5 "${clean}.ogg" && rm -f "$file"
+            done
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git diff --cached --quiet || (git commit -m "Auto-convert to OGG" && git push)
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - uses: actions/deploy-pages@v4

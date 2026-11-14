@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Convert audio to OGG
+      - name: Convert audio and update README
         run: |
           shopt -s nullglob nocaseglob
           files=(*.m4a *.mp3 *.wav *.flac *.opus)
@@ -31,11 +31,20 @@ jobs:
               done
               ffmpeg -y -i "$file" -vn -ar 44100 -ac 2 -c:a libvorbis -q:a 5 "${clean}.ogg" && rm -f "$file"
             done
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git diff --cached --quiet || (git commit -m "Auto-convert to OGG" && git push)
           fi
+
+          {
+            echo "# Ссылки на треки для Minecraft"
+            echo ""
+            for ogg in *.ogg; do
+              echo "* <https://swager-aw.github.io/Music/${ogg}>"
+            done
+          } > README.md
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || (git commit -m "Auto-convert and update links" && git push)
 
       - uses: actions/upload-pages-artifact@v3
         with:

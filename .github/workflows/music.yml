@@ -8,43 +8,117 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: "music-pipeline"
+  cancel-in-progress: false
+
 jobs:
   deploy:
     environment: github-pages
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
-      - name: Convert audio and update README
+      - name: Unpack ZIP, convert audio and update README
         run: |
-          shopt -s nullglob nocaseglob
-          files=(*.m4a *.mp3 *.wav *.flac *.opus)
+          shopt -s nullglob
+
+          mapfile -d '' zips < <(find . -mindepth 1 -not -path '*/.*' -type f -iname '*.zip' -print0)
+          if [ ${#zips[@]} -gt 0 ]; then
+            if ! command -v 7z >/dev/null 2>&1; then
+              sudo apt-get update && sudo apt-get install -y p7zip-full
+            fi
+            for zf in "${zips[@]}"; do
+              target_dir=$(dirname "$zf")
+              tmp_dir=$(mktemp -d)
+              7z x -y "$zf" -o"$tmp_dir" >/dev/null || true
+              while IFS= read -r -d '' extracted; do
+                base_ext=$(basename "$extracted")
+                dest="${target_dir}/${base_ext}"
+                k=1
+                while [ -e "$dest" ]; do
+                  dest="${target_dir}/${k}_${base_ext}"
+                  k=$((k + 1))
+                done
+                mv "$extracted" "$dest"
+              done < <(find "$tmp_dir" -type f \( -iname '*.m4a' -o -iname '*.mp3' -o -iname '*.wav' -o -iname '*.flac' -o -iname '*.opus' -o -iname '*.ogg' \) -print0)
+              rm -rf "$tmp_dir" "$zf"
+            done
+          fi
+
+          mapfile -d '' files < <(find . -mindepth 1 -not -path '*/.*' -type f \( -iname '*.m4a' -o -iname '*.mp3' -o -iname '*.wav' -o -iname '*.flac' -o -iname '*.opus' \) -print0)
           if [ ${#files[@]} -gt 0 ]; then
-            sudo apt-get update && sudo apt-get install -y ffmpeg
-            i=1
+            if ! command -v ffmpeg >/dev/null 2>&1; then
+              sudo apt-get update && sudo apt-get install -y ffmpeg
+            fi
             for file in "${files[@]}"; do
-              name="${file%.*}"
+              dir=$(dirname "$file")
+              base=$(basename "$file")
+              name="${base%.*}"
               clean=$(echo "$name" | sed -E 's/[^a-zA-Z0-9_-]+/_/g; s/^_+|_+$//g')
-              while [ -z "$clean" ] || [ -f "${clean}.ogg" ]; do
+              i=1
+              while [ -z "$clean" ] || [ -f "${dir}/${clean}.ogg" ]; do
                 clean="track_${i}"
                 i=$((i + 1))
               done
-              ffmpeg -y -i "$file" -vn -ar 44100 -ac 2 -c:a libvorbis -q:a 5 "${clean}.ogg" && rm -f "$file"
+              ffmpeg -y -i "$file" -vn -ar 44100 -ac 2 -c:a libvorbis -q:a 5 "${dir}/${clean}.ogg" && rm -f "$file"
             done
           fi
+
+          while IFS= read -r -d '' ogg_file; do
+            dir=$(dirname "$ogg_file")
+            base=$(basename "$ogg_file")
+            name="${base%.*}"
+            clean=$(echo "$name" | sed -E 's/[^a-zA-Z0-9_-]+/_/g; s/^_+|_+$//g')
+            if [ "$base" != "${clean}.ogg" ]; then
+              i=1
+              while [ -z "$clean" ] || [ -f "${dir}/${clean}.ogg" ]; do
+                clean="track_${i}"
+                i=$((i + 1))
+              done
+              mv "$ogg_file" "${dir}/${clean}.ogg"
+            fi
+          done < <(find . -mindepth 1 -not -path '*/.*' -type f -iname '*.ogg' -print0)
 
           {
             echo "# Ссылки на треки для Minecraft"
             echo ""
-            for ogg in *.ogg; do
-              echo "* <https://swager-aw.github.io/Music/${ogg}>"
+            root_oggs=(*.ogg)
+            if [ ${#root_oggs[@]} -gt 0 ]; then
+              echo "## Общие треки"
+              for ogg in "${root_oggs[@]}"; do
+                echo "* <https://swager-aw.github.io/Music/${ogg}>"
+              done
+              echo ""
+            fi
+
+            for dir in */; do
+              [ -d "$dir" ] || continue
+              folder="${dir%/}"
+              [[ "$folder" == .* ]] && continue
+              folder_oggs=("${folder}"/*.ogg)
+              echo "## Папка ${folder}"
+              if [ ${#folder_oggs[@]} -gt 0 ]; then
+                for ogg_path in "${folder_oggs[@]}"; do
+                  echo "* <https://swager-aw.github.io/Music/${ogg_path}>"
+                done
+              else
+                echo "* *(пока пусто)*"
+              fi
+              echo ""
             done
           } > README.md
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
-          git diff --cached --quiet || (git commit -m "Auto-convert and update links" && git push)
+          if ! git diff --cached --quiet; then
+            git commit -m "Unpack ZIP, convert audio and update links"
+            git pull --rebase origin main
+            git push
+          fi
 
       - uses: actions/upload-pages-artifact@v3
         with:
